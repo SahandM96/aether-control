@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aether Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="grid-bg" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="brand-block">
+      <p class="eyebrow">CluvexStudio</p>
+      <h1 class="brand">Aether</h1>
+      <p class="tagline">کنترل تونل محلی · SOCKS5</p>
+    </div>
+    <div class="status-chip" id="statusChip" data-phase="disconnected">
+      <span class="dot"></span>
+      <span id="statusLabel">قطع</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel hero-panel">
+      <div class="hero-meta">
+        <div>
+          <p class="label">پروکسی</p>
+          <p class="mono value" id="socksUrl">socks5h://127.0.0.1:1819</p>
+        </div>
+        <div>
+          <p class="label">خروجی (IP)</p>
+          <p class="mono value" id="egressIp">—</p>
+        </div>
+        <div>
+          <p class="label">کشور</p>
+          <p class="value" id="egressCountry">—</p>
+        </div>
+        <div>
+          <p class="label">PID</p>
+          <p class="mono value" id="pidValue">—</p>
+        </div>
+        <div>
+          <p class="label">آپتایم</p>
+          <p class="mono value" id="uptimeValue">—</p>
+        </div>
+        <div>
+          <p class="label">WARP / Colo</p>
+          <p class="mono value" id="egressMeta">—</p>
+        </div>
+        <div>
+          <p class="label">تأخیر واقعی</p>
+          <p class="mono value" id="latencyValue">—</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn primary" id="btnConnect">وصل کردن</button>
+        <button type="button" class="btn danger" id="btnDisconnect">قطع کردن</button>
+        <button type="button" class="btn ghost" id="btnTest">تست اتصال</button>
+        <button type="button" class="btn ghost" id="btnRefreshEgress">بروزرسانی IP</button>
+      </div>
+      <p class="hint" id="hint">وضعیت در حال بارگذاری…</p>
+      <pre class="test-out" id="testOut" hidden></pre>
+    </section>
+
+    <section class="panel share-panel">
+      <div class="panel-head">
+        <h2>اشتراک خانه (QR)</h2>
+        <button type="button" class="btn small" id="btnToggleLan">فعال‌سازی LAN</button>
+      </div>
+      <div class="share-grid">
+        <div class="qr-wrap">
+          <img id="qrImage" alt="QR SOCKS5" hidden />
+          <p class="qr-placeholder" id="qrPlaceholder">برای ساخت QR، اشتراک LAN را روشن کن</p>
+        </div>
+        <div class="share-meta">
+          <p class="label">آدرس برای موبایل / لپ‌تاپ</p>
+          <p class="mono value" id="shareUrl">—</p>
+          <p class="label">IPهای LAN</p>
+          <p class="mono value" id="lanIps">—</p>
+          <label class="share-ip-pick">
+            <span class="label">IP برای QR</span>
+            <select id="shareIpSelect"></select>
+          </label>
+          <p class="hint share-hint">
+            در گوشی یک کلاینت SOCKS5 (مثل Shadowrocket / v2rayNG / ProxyDroid) بساز و QR را اسکن کن،
+            یا آدرس بالا را دستی وارد کن. پنل فقط روی همین کامپیوتر است؛ فقط پروکسی روی شبکه پخش می‌شود.
+          </p>
+          <div class="actions">
+            <button type="button" class="btn ghost small" id="btnCopyShare">کپی آدرس</button>
+            <button type="button" class="btn ghost small" id="btnRefreshQr">تازه‌سازی QR</button>
+            <button type="button" class="btn ghost small" id="btnRefreshLatency">اندازه‌گیری تأخیر</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>تنظیمات</h2>
+        <button type="button" class="btn small" id="btnSave">ذخیره</button>
+      </div>
+
+      <form id="configForm" class="form-grid">
+        <label>
+          <span>پروتکل</span>
+          <select name="protocol">
+            <option value="masque">MASQUE</option>
+            <option value="wg">WireGuard</option>
+            <option value="gool">Gool (nested WG)</option>
+          </select>
+        </label>
+
+        <label>
+          <span>نسخه IP</span>
+          <select name="ipVersion">
+            <option value="4">IPv4</option>
+            <option value="6">IPv6</option>
+            <option value="dual">Dual</option>
+          </select>
+        </label>
+
+        <label>
+          <span>حالت اسکن</span>
+          <select name="scan">
+            <option value="turbo">turbo</option>
+            <option value="balanced">balanced</option>
+            <option value="thorough">thorough</option>
+            <option value="stealth">stealth</option>
+          </select>
+        </label>
+
+        <label>
+          <span>پروفایل Noize</span>
+          <select name="noize">
+            <option value="firewall">firewall</option>
+            <option value="gfw">gfw</option>
+            <option value="balanced">balanced</option>
+            <option value="aggressive">aggressive</option>
+            <option value="light">light</option>
+            <option value="off">off</option>
+          </select>
+        </label>
+
+        <label class="span-2">
+          <span>آدرس SOCKS5</span>
+          <input name="bind" type="text" spellcheck="false" placeholder="127.0.0.1:1819" />
+        </label>
+
+        <label class="span-2">
+          <span>Peer ثابت (اختیاری)</span>
+          <input name="peer" type="text" spellcheck="false" placeholder="مثلاً 162.159.198.1:443" />
+        </label>
+
+        <label class="check">
+          <input name="http2" type="checkbox" />
+          <span>HTTP/2 به‌جای HTTP/3 (برای شبکه‌هایی که UDP را می‌بندند)</span>
+        </label>
+
+        <label class="check">
+          <input name="fragment" type="checkbox" />
+          <span>Fragment کردن ClientHello (فقط با HTTP/2)</span>
+        </label>
+
+        <label class="check">
+          <input name="quickReconnect" type="checkbox" />
+          <span>Quick reconnect به آخرین gateway موفق</span>
+        </label>
+      </form>
+
+      <p class="args-preview">
+        <span class="label">فرمان اجرایی</span>
+        <code id="argsPreview" class="mono">—</code>
+      </p>
+    </section>
+
+    <section class="panel log-panel">
+      <div class="panel-head">
+        <h2>لاگ زنده</h2>
+        <button type="button" class="btn small ghost" id="btnClearLogs">پاک کردن</button>
+      </div>
+      <pre class="log" id="logView" aria-live="polite"></pre>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>پنل فقط روی localhost گوش می‌دهد</span>
+    <span id="panelMeta" class="mono"></span>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

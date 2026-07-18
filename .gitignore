@@ -1,0 +1,13 @@
+node_modules/
+aether-panel/node_modules/
+aether-panel/data/
+aether/*.exe
+aether/*.zip
+aether/*.sha256
+aether/*.toml
+aether/*-lastconn.toml
+.DS_Store
+Thumbs.db
+*.log
+.env
+*.env

@@ -1,0 +1,16 @@
+{
+  "bind": "127.0.0.1:1819",
+  "protocol": "masque",
+  "ipVersion": "4",
+  "scan": "balanced",
+  "noize": "firewall",
+  "http2": false,
+  "fragment": false,
+  "quickReconnect": true,
+  "peer": "",
+  "shareIp": "",
+  "aetherExe": "",
+  "aetherCwd": "",
+  "panelHost": "127.0.0.1",
+  "panelPort": 3847
+}
