@@ -6,7 +6,8 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\verify-install.ps1 -SkipStart
 
 param(
-    [string]$PanelUrl = "http://127.0.0.1:3847",
+    [string]$PanelHost = "127.0.0.1",
+    [int]$PanelPort = 3847,
     [switch]$SkipStart,
     [switch]$KeepConnected
 )
@@ -15,42 +16,61 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $panelDir = Join-Path $root "aether-panel"
 $exe = Join-Path $root "aether\aether.exe"
+$PanelUrl = "http://${PanelHost}:${PanelPort}"
 $startedByUs = $false
-$panelProc = $null
 
 function Fail([string]$msg) {
-    Write-Host "FAIL: $msg" -ForegroundColor Red
-    if ($startedByUs -and $panelProc -and -not $panelProc.HasExited) {
-        Stop-Process -Id $panelProc.Id -Force -ErrorAction SilentlyContinue
-    }
+    Write-Host "FAIL: $msg"
     exit 1
 }
 
 function Ok([string]$msg) {
-    Write-Host "OK  : $msg" -ForegroundColor Green
+    Write-Host "OK  : $msg"
 }
 
-function Invoke-Json {
+function Curl-Json {
     param(
-        [string]$Method = "GET",
+        [ValidateSet("GET", "POST", "PUT")][string]$Method = "GET",
         [Parameter(Mandatory = $true)][string]$Url,
-        [string]$Body = $null
+        [string]$Body = $null,
+        [int]$MaxTime = 60
     )
-    $args = @{
-        Method      = $Method
-        Uri         = $Url
-        TimeoutSec  = 60
-        ErrorAction = "Stop"
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        if ($null -ne $Body) {
+            $bodyFile = [System.IO.Path]::GetTempFileName()
+            Set-Content -Path $bodyFile -Value $Body -Encoding UTF8
+            & curl.exe -sS --max-time $MaxTime -X $Method -H "Content-Type: application/json" --data-binary "@$bodyFile" $Url -o $tmp
+            Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue
+        } else {
+            & curl.exe -sS --max-time $MaxTime -X $Method $Url -o $tmp
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl exit $LASTEXITCODE for $Method $Url"
+        }
+        $raw = Get-Content -Path $tmp -Raw -Encoding utf8
+        return $raw | ConvertFrom-Json
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
-    if ($Body -ne $null) {
-        $args.ContentType = "application/json"
-        $args.Body = $Body
+}
+
+function Test-Health {
+    try {
+        $h = Curl-Json -Url "$PanelUrl/api/health" -MaxTime 5
+        return [bool]$h.ok
+    } catch {
+        return $false
     }
-    return Invoke-RestMethod @args
 }
 
 Write-Host "=== Aether Control verify-install ==="
 Write-Host "Root: $root"
+
+if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+    Fail "curl.exe not found (required on Windows for this script)"
+}
+Ok "curl.exe present"
 
 if (-not (Test-Path $exe)) {
     Fail "Missing $exe — run setup.ps1 or aether\download-aether.ps1 first"
@@ -66,13 +86,7 @@ if (-not (Test-Path (Join-Path $panelDir "node_modules\express"))) {
 }
 Ok "panel node_modules present"
 
-# Health / start panel if needed
-$healthy = $false
-try {
-    $h = Invoke-Json -Url "$PanelUrl/api/health"
-    if ($h.ok) { $healthy = $true }
-} catch { $healthy = $false }
-
+$healthy = Test-Health
 if (-not $healthy) {
     if ($SkipStart) { Fail "Panel not reachable at $PanelUrl" }
     Write-Host "Starting panel..."
@@ -81,35 +95,30 @@ if (-not $healthy) {
     $logOut = Join-Path $dataDir "panel-stdout.log"
     $logErr = Join-Path $dataDir "panel-stderr.log"
     $nodePath = (Get-Command node).Source
-    $panelProc = Start-Process -FilePath $nodePath `
-        -ArgumentList "server.js" `
-        -WorkingDirectory $panelDir `
-        -RedirectStandardOutput $logOut `
-        -RedirectStandardError $logErr `
-        -WindowStyle Hidden `
-        -PassThru
+
+    # Detached start via cmd so the process survives the verifier
+    $cmd = " `"$nodePath`" server.js >> `"$logOut`" 2>> `"$logErr`" "
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -WorkingDirectory $panelDir -WindowStyle Hidden | Out-Null
     $startedByUs = $true
-    for ($i = 0; $i -lt 30; $i++) {
+
+    for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Seconds 1
-        try {
-            $h = Invoke-Json -Url "$PanelUrl/api/health"
-            if ($h.ok) { $healthy = $true; break }
-        } catch {}
+        if (Test-Health) { $healthy = $true; break }
     }
     if (-not $healthy) {
         $tail = ""
-        if (Test-Path $logErr) { $tail += (Get-Content $logErr -Raw) }
-        if (Test-Path $logOut) { $tail += (Get-Content $logOut -Raw) }
-        Fail "Panel did not become healthy at $PanelUrl. Logs:`n$tail"
+        if (Test-Path $logErr) { $tail += "`nSTDERR:`n" + (Get-Content $logErr -Raw) }
+        if (Test-Path $logOut) { $tail += "`nSTDOUT:`n" + (Get-Content $logOut -Raw) }
+        Fail "Panel did not become healthy at $PanelUrl.$tail"
     }
 }
 Ok "panel health $PanelUrl"
 
-# Ensure disconnected before connect (clean slate)
-try { Invoke-Json -Method POST -Url "$PanelUrl/api/disconnect" -Body "{}" | Out-Null } catch {}
+# Clean slate
+try { Curl-Json -Method POST -Url "$PanelUrl/api/disconnect" -Body "{}" | Out-Null } catch {}
 Start-Sleep -Seconds 1
 
-$status = Invoke-Json -Url "$PanelUrl/api/status"
+$status = Curl-Json -Url "$PanelUrl/api/status"
 $exePath = $status.status.paths.exe
 if (-not $exePath -or -not (Test-Path $exePath)) {
     Fail "Panel resolved missing binary: $exePath"
@@ -117,56 +126,53 @@ if (-not $exePath -or -not (Test-Path $exePath)) {
 Ok "panel binary path: $exePath"
 
 Write-Host "Connecting (may take up to ~2 minutes for scan)..."
-$null = Invoke-Json -Method POST -Url "$PanelUrl/api/connect" -Body "{}"
+$null = Curl-Json -Method POST -Url "$PanelUrl/api/connect" -Body "{}"
 
 $connected = $false
 for ($i = 0; $i -lt 90; $i++) {
     Start-Sleep -Seconds 2
-    $status = Invoke-Json -Url "$PanelUrl/api/status"
+    $status = Curl-Json -Url "$PanelUrl/api/status"
     $phase = $status.status.phase
     Write-Host ("  [{0}] phase={1} connected={2}" -f $i, $phase, $status.status.connected)
     if ($status.status.connected) { $connected = $true; break }
-    if ($phase -eq "disconnected" -and $i -gt 8) {
-        if ($status.status.lastError) {
-            Fail "Disconnected during connect: $($status.status.lastError)"
-        }
+    if ($phase -eq "disconnected" -and $i -gt 8 -and $status.status.lastError) {
+        Fail "Disconnected during connect: $($status.status.lastError)"
     }
 }
 if (-not $connected) { Fail "Timed out waiting for SOCKS5 / connected phase" }
 Ok "connected (SOCKS up)"
 
-# Traffic test
-$trace = & curl.exe -x socks5h://127.0.0.1:1819 --max-time 30 -sS https://www.cloudflare.com/cdn-cgi/trace
+$traceFile = [System.IO.Path]::GetTempFileName()
+& curl.exe -x socks5h://127.0.0.1:1819 --max-time 30 -sS https://www.cloudflare.com/cdn-cgi/trace -o $traceFile
 if ($LASTEXITCODE -ne 0) { Fail "curl through SOCKS failed (exit $LASTEXITCODE)" }
+$trace = Get-Content $traceFile -Raw
+Remove-Item $traceFile -Force -ErrorAction SilentlyContinue
 if ($trace -notmatch "warp=on") {
     Write-Host $trace
     Fail "curl trace missing warp=on"
 }
 Ok "curl SOCKS trace has warp=on"
 
-# Latency + QR/LAN
-$lat = Invoke-Json -Method POST -Url "$PanelUrl/api/latency/refresh" -Body "{}"
+$lat = Curl-Json -Method POST -Url "$PanelUrl/api/latency/refresh" -Body "{}"
 if ($null -eq $lat.latency.ms) { Fail "latency probe failed: $($lat.latency.error)" }
 Ok "latency $($lat.latency.ms) ms"
 
-$lan = Invoke-Json -Method POST -Url "$PanelUrl/api/share/lan" -Body '{"enabled":true}'
+$lan = Curl-Json -Method POST -Url "$PanelUrl/api/share/lan" -Body '{"enabled":true}'
 if (-not $lan.status.share.shareUrl) { Fail "LAN shareUrl missing" }
 if (-not $lan.qrDataUrl) { Fail "QR data URL missing" }
 Ok "LAN share $($lan.status.share.shareUrl) + QR"
 
 if (-not $KeepConnected) {
-    $null = Invoke-Json -Method POST -Url "$PanelUrl/api/disconnect" -Body "{}"
+    $null = Curl-Json -Method POST -Url "$PanelUrl/api/disconnect" -Body "{}"
     Start-Sleep -Seconds 1
-    $status = Invoke-Json -Url "$PanelUrl/api/status"
+    $status = Curl-Json -Url "$PanelUrl/api/status"
     if ($status.status.connected) { Fail "Still connected after disconnect" }
     Ok "disconnected"
 }
 
 Write-Host ""
-Write-Host "ALL CHECKS PASSED" -ForegroundColor Green
+Write-Host "ALL CHECKS PASSED"
 Write-Host "Verified against CluvexStudio/Aether (see README)."
-
-if ($startedByUs -and $panelProc -and -not $panelProc.HasExited -and -not $KeepConnected) {
-    # leave panel running for user convenience after verify
+if ($startedByUs) {
     Write-Host "Panel left running at $PanelUrl"
 }
