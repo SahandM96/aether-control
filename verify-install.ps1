@@ -39,7 +39,8 @@ function Curl-Json {
     try {
         if ($null -ne $Body) {
             $bodyFile = [System.IO.Path]::GetTempFileName()
-            Set-Content -Path $bodyFile -Value $Body -Encoding UTF8
+            # Avoid UTF-8 BOM — Express JSON parser rejects BOM-prefixed bodies
+            [System.IO.File]::WriteAllText($bodyFile, $Body)
             & curl.exe -sS --max-time $MaxTime -X $Method -H "Content-Type: application/json" --data-binary "@$bodyFile" $Url -o $tmp
             Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue
         } else {
@@ -48,7 +49,10 @@ function Curl-Json {
         if ($LASTEXITCODE -ne 0) {
             throw "curl exit $LASTEXITCODE for $Method $Url"
         }
-        $raw = Get-Content -Path $tmp -Raw -Encoding utf8
+        $raw = ([System.IO.File]::ReadAllText($tmp)).Trim()
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            throw "empty response for $Method $Url"
+        }
         return $raw | ConvertFrom-Json
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
@@ -56,11 +60,18 @@ function Curl-Json {
 }
 
 function Test-Health {
+    $tmp = [System.IO.Path]::GetTempFileName()
     try {
-        $h = Curl-Json -Url "$PanelUrl/api/health" -MaxTime 5
-        return [bool]$h.ok
+        & curl.exe -s --max-time 3 "$PanelUrl/api/health" -o $tmp 2>$null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $raw = Get-Content -Path $tmp -Raw -ErrorAction SilentlyContinue
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+        $j = $raw | ConvertFrom-Json
+        return [bool]$j.ok
     } catch {
         return $false
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -90,22 +101,29 @@ $healthy = Test-Health
 if (-not $healthy) {
     if ($SkipStart) { Fail "Panel not reachable at $PanelUrl" }
     Write-Host "Starting panel..."
-    $dataDir = Join-Path $panelDir "data"
-    if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-Null }
-    $logOut = Join-Path $dataDir "panel-stdout.log"
-    $logErr = Join-Path $dataDir "panel-stderr.log"
-    $nodePath = (Get-Command node).Source
-
-    # Detached start via cmd so the process survives the verifier
-    $cmd = " `"$nodePath`" server.js >> `"$logOut`" 2>> `"$logErr`" "
-    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -WorkingDirectory $panelDir -WindowStyle Hidden | Out-Null
+    $spawnJs = Join-Path $panelDir "scripts\spawn-detached.js"
+    if (-not (Test-Path $spawnJs)) {
+        Fail "Missing $spawnJs"
+    }
+    $pidText = & node $spawnJs
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pidText)) {
+        Fail "spawn-detached.js failed to start panel"
+    }
+    Write-Host "    spawned pid=$pidText"
     $startedByUs = $true
 
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Seconds 1
-        if (Test-Health) { $healthy = $true; break }
+        # swallow curl connection errors while waiting
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        $ok = Test-Health
+        $ErrorActionPreference = $prevErr
+        if ($ok) { $healthy = $true; break }
     }
     if (-not $healthy) {
+        $logOut = Join-Path $panelDir "data\panel-stdout.log"
+        $logErr = Join-Path $panelDir "data\panel-stderr.log"
         $tail = ""
         if (Test-Path $logErr) { $tail += "`nSTDERR:`n" + (Get-Content $logErr -Raw) }
         if (Test-Path $logOut) { $tail += "`nSTDOUT:`n" + (Get-Content $logOut -Raw) }

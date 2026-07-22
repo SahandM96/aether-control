@@ -1,6 +1,8 @@
 node_modules/
 aether-panel/node_modules/
 aether-panel/data/
+aether-panel/data/*.log
+aether-panel/data/panel.pid
 aether/*.exe
 aether/*.zip
 aether/*.sha256
