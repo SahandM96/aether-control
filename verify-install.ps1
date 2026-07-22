@@ -76,17 +76,32 @@ try {
 if (-not $healthy) {
     if ($SkipStart) { Fail "Panel not reachable at $PanelUrl" }
     Write-Host "Starting panel..."
-    $panelProc = Start-Process -FilePath "node" -ArgumentList "server.js" `
-        -WorkingDirectory $panelDir -WindowStyle Hidden -PassThru
+    $dataDir = Join-Path $panelDir "data"
+    if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-Null }
+    $logOut = Join-Path $dataDir "panel-stdout.log"
+    $logErr = Join-Path $dataDir "panel-stderr.log"
+    $nodePath = (Get-Command node).Source
+    $panelProc = Start-Process -FilePath $nodePath `
+        -ArgumentList "server.js" `
+        -WorkingDirectory $panelDir `
+        -RedirectStandardOutput $logOut `
+        -RedirectStandardError $logErr `
+        -WindowStyle Hidden `
+        -PassThru
     $startedByUs = $true
-    for ($i = 0; $i -lt 20; $i++) {
+    for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Seconds 1
         try {
             $h = Invoke-Json -Url "$PanelUrl/api/health"
             if ($h.ok) { $healthy = $true; break }
         } catch {}
     }
-    if (-not $healthy) { Fail "Panel did not become healthy at $PanelUrl" }
+    if (-not $healthy) {
+        $tail = ""
+        if (Test-Path $logErr) { $tail += (Get-Content $logErr -Raw) }
+        if (Test-Path $logOut) { $tail += (Get-Content $logOut -Raw) }
+        Fail "Panel did not become healthy at $PanelUrl. Logs:`n$tail"
+    }
 }
 Ok "panel health $PanelUrl"
 
