@@ -11,3 +11,6 @@ Thumbs.db
 *.log
 .env
 *.env
+status.json
+lat.json
+lan.json

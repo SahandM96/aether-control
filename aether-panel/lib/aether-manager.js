@@ -427,7 +427,9 @@ class AetherManager {
     const { cwd, exe } = resolvePaths(config);
 
     if (!fs.existsSync(exe)) {
-      const err = new Error(`aether binary not found: ${exe}`);
+      const err = new Error(
+        `aether binary not found: ${exe}. Run setup.ps1 or: powershell -NoProfile -ExecutionPolicy Bypass -File aether\\download-aether.ps1`
+      );
       err.code = "MISSING_BINARY";
       throw err;
     }
